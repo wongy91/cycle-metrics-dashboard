@@ -89,7 +89,7 @@ LABEL2:slugId2"></textarea>
       <span class="block"><b>Overall</b> (in summary line) = total completed pts ÷ total planned pts — pts-weighted, so big weeks count more than small ones. Differs from Perf because Perf treats each week equally regardless of size.</span>
     </p>
     <div id="teamFilterBar" class="hidden mb-2 flex gap-2 items-center text-sm"></div>
-    <div id="tableContainer" class="bg-white rounded shadow overflow-auto" style="max-height: 75vh;"></div>
+    <div id="tableContainer" class="bg-white rounded shadow"></div>
   </section>
 </div>
 
@@ -476,8 +476,7 @@ function buildTeamCycleRows(teamsData, fromDate, toDate) {
   return out;
 }
 
-function buildCompareRows(longRows, members, bugViews) {
-  const teams = LAST.teams || []; // dynamic from --teams input
+function buildCompareRows(longRows, members, bugViews, teams) {
   const byKey = new Map();
   for (const r of longRows) byKey.set(r["Week Start"] + "::" + r.Member, r);
 
@@ -942,7 +941,7 @@ async function analyze() {
     const longRows = buildLongRows(weeks, teamsData, bugViews,
       memberFilter.length ? memberFilter : null);
     const compareRows = memberFilter.length
-      ? buildCompareRows(longRows, memberFilter, bugViews)
+      ? buildCompareRows(longRows, memberFilter, bugViews, teams)
       : [];
     const teamCycleRows = buildTeamCycleRows(teamsData, fromD, toD);
 
