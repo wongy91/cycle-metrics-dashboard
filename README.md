@@ -21,8 +21,8 @@ python3 -m http.server -d . 8000
 **First run:**
 1. Generate a Linear personal API key at <https://linear.app/settings/api>.
 2. Paste into the **Linear API Key** field, click **Save** (stored in browser localStorage).
-3. Set teams (default `ETL,CD,EXL`), date range, members to compare (default `jack,yishern,shenwei,mengyit`).
-4. Optionally add custom bug views as `LABEL:slugId` (one per line). The slugId is the last hex chunk in the view's URL: `…/view/bugs-cd-b0fd1ffdeb3f` → `b0fd1ffdeb3f`.
+3. Set teams (e.g. `ETL,CD`), date range, members to compare (comma-separated).
+4. Optionally add custom bug views as `LABEL:slugId` (one per line). The slugId is the last hex chunk in the view's URL: `…/view/<slug>-<slugId>`.
 5. Click **Analyze**.
 
 **Output:**
@@ -44,14 +44,14 @@ Drop the folder onto Vercel / Netlify / Cloudflare Pages. Add password protectio
 export LINEAR_API_KEY=lin_api_...
 
 # Per-cycle CSV for one team
-python3 scripts/linear_cycle_report.py --team ETL --from 30 --to 38
+python3 scripts/linear_cycle_report.py --team <KEY> --from <N> --to <N>
 
 # Combined weekly view across teams + bug views
 python3 scripts/linear_weekly_report.py \
-  --teams ETL,CD,EXL \
-  --bug-view ETL1:b0fd1ffdeb3f --bug-view ETL2:bff8b4260fff \
+  --teams <KEY1>,<KEY2> \
+  --bug-view <LABEL>:<slugId> \
   --from 2026-03-02 --to 2026-05-03 \
-  --compare jack,yishern,shenwei,mengyit
+  --compare <name1>,<name2>
 ```
 
 ## How it works
@@ -63,5 +63,5 @@ For each cycle X with date range [start, end]:
 - Unestimated issues count as 1 point.
 
 For weekly view:
-- ETL cycles align to weeks 1:1.
-- CD/EXL cycles span 2 weeks → "Per-Week" columns split CD/EXL pts proportionally. "Active cycles" columns show the full cycle (helpful for "what's on the plate this week" but double-counts CD across two consecutive weeks).
+- 1-week cycles align to weeks 1:1.
+- 2-week (biweekly) cycles span 2 weeks → "Per-Week" columns split their pts proportionally (cycle_pts / 2). "Active cycles" columns show the full cycle pts (useful for "what's on the plate this week" but double-counts biweekly cycles across two consecutive weeks).

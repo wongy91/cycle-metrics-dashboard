@@ -38,7 +38,7 @@
 
     <div>
       <label class="block text-sm font-medium mb-1">Teams (comma-separated keys)</label>
-      <input id="teams" type="text" class="w-full border rounded px-2 py-1" value="ETL,CD,EXL" />
+      <input id="teams" type="text" class="w-full border rounded px-2 py-1" placeholder="TEAM1,TEAM2,..." />
     </div>
 
     <div>
@@ -53,13 +53,13 @@
 
     <div>
       <label class="block text-sm font-medium mb-1">Members to compare (comma-separated; empty = all)</label>
-      <input id="members" type="text" class="w-full border rounded px-2 py-1" value="jack,yishern,shenwei,mengyit" />
+      <input id="members" type="text" class="w-full border rounded px-2 py-1" placeholder="member1,member2,..." />
     </div>
 
     <div>
       <label class="block text-sm font-medium mb-1">Bug Views (LABEL:slugId, one per line)</label>
-      <textarea id="bugViews" class="w-full border rounded px-2 py-1 font-mono text-xs" rows="2">ETL1:b0fd1ffdeb3f
-ETL2:bff8b4260fff</textarea>
+      <textarea id="bugViews" class="w-full border rounded px-2 py-1 font-mono text-xs" rows="2" placeholder="LABEL1:slugId1
+LABEL2:slugId2"></textarea>
     </div>
 
     <div class="lg:col-span-2 flex gap-2 items-center">
@@ -477,7 +477,7 @@ function buildTeamCycleRows(teamsData, fromDate, toDate) {
 }
 
 function buildCompareRows(longRows, members, bugViews) {
-  const teams = ["ETL", "CD", "EXL"]; // try all common; absent ones skipped
+  const teams = LAST.teams || []; // dynamic from --teams input
   const byKey = new Map();
   for (const r of longRows) byKey.set(r["Week Start"] + "::" + r.Member, r);
 
@@ -651,7 +651,13 @@ function pieSVG(parts, size = 44) {
   return `<svg width="${size}" height="${size}" class="inline-block align-middle">${paths}</svg>`;
 }
 
-const TEAM_COLORS = { ETL: "#3b82f6", CD: "#a855f7", EXL: "#10b981" };
+const TEAM_PALETTE = ["#3b82f6", "#a855f7", "#10b981", "#f59e0b", "#ec4899", "#6366f1"];
+function teamColor(tk) {
+  // Stable hash: same key always gets same color across renders
+  let h = 0;
+  for (let i = 0; i < tk.length; i++) h = (h * 31 + tk.charCodeAt(i)) >>> 0;
+  return TEAM_PALETTE[h % TEAM_PALETTE.length];
+}
 const MEMBER_PALETTE = ["#f59e0b", "#06b6d4", "#ec4899", "#6366f1", "#84cc16", "#f43f5e", "#14b8a6", "#a855f7"];
 
 function renderCompareGroupedByMember() {
@@ -706,7 +712,7 @@ function renderCompareGroupedByMember() {
       return out;
     }).filter(r => {
       // Hide rows where the member has nothing
-      const teamCells = ["ETL", "CD", "EXL"].some(t => r[t]);
+      const teamCells = LAST.teams.some(t => r[t]);
       const bugs = (+r["Bugs Open"] || 0) + (+r["Bugs Resolved"] || 0);
       return teamCells || bugs > 0;
     });
@@ -764,11 +770,11 @@ function renderCompareGroupedByMember() {
     }
 
     // Per-team totals from long rows (dedupe biweekly cycles by cycle number)
-    const teamTotals = { ETL: { p: 0, c: 0, n: 0 }, CD: { p: 0, c: 0, n: 0 }, EXL: { p: 0, c: 0, n: 0 } };
-    const seen = { ETL: new Set(), CD: new Set(), EXL: new Set() };
+    const teamTotals = {}, seen = {};
+    for (const tk of LAST.teams) { teamTotals[tk] = { p: 0, c: 0, n: 0 }; seen[tk] = new Set(); }
     for (const r of memberRows) {
       const lr = longByKey.get(r["Week Start"] + "::" + member) || {};
-      for (const tk of ["ETL", "CD", "EXL"]) {
+      for (const tk of LAST.teams) {
         const cycLabel = lr[`${tk} Cycle`];
         if (!cycLabel || seen[tk].has(cycLabel)) continue;
         seen[tk].add(cycLabel);
@@ -782,9 +788,9 @@ function renderCompareGroupedByMember() {
     const badWeekText = badWeeks > 0
       ? `<span class="text-red-700">⚠ ${badWeeks} wk &lt;50%</span>`
       : `<span class="text-slate-500">no weeks &lt;50%</span>`;
-    const pieParts = ["ETL", "CD", "EXL"]
-      .filter(tk => teamTotals[tk].c > 0)
-      .map(tk => ({ label: tk, value: teamTotals[tk].c, color: TEAM_COLORS[tk] }));
+    const pieParts = LAST.teams
+      .filter(tk => teamTotals[tk]?.c > 0)
+      .map(tk => ({ label: tk, value: teamTotals[tk].c, color: teamColor(tk) }));
     const pie = pieSVG(pieParts);
     const pieLegend = pieParts.map(p =>
       `<span class="inline-flex items-center gap-1"><span class="inline-block w-2 h-2 rounded-sm" style="background:${p.color}"></span>${p.label} ${p.value}</span>`
@@ -803,7 +809,7 @@ function renderCompareGroupedByMember() {
       &nbsp;|&nbsp; Overall: <b>${overallRate}</b>
       &nbsp;|&nbsp; ${badWeekText}
     </p>`;
-    const teamSummary = ["ETL", "CD", "EXL"].filter(tk => teamTotals[tk].n > 0).map(tk => {
+    const teamSummary = LAST.teams.filter(tk => teamTotals[tk]?.n > 0).map(tk => {
       const t = teamTotals[tk];
       const avg = t.n ? (t.c / t.n) : 0;
       const rate = t.p ? (t.c / t.p * 100).toFixed(0) + "%" : "—";

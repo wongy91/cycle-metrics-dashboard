@@ -8,19 +8,19 @@ and combined totals.
 Usage:
   LINEAR_API_KEY=lin_api_... \\
     python3 scripts/linear_weekly_report.py \\
-      --teams ETL,CD,EXL \\
+      --teams TEAM1,TEAM2 \\
       --from 2026-03-09 --to 2026-05-03 \\
-      [--member jack] \\
-      [--bug-view ETL1:b0fd1ffdeb3f] [--bug-view ETL2:bff8b4260fff]
+      [--member <name>] \\
+      [--bug-view <label>:<slugId>] ...
 
 --bug-view LABEL:slugId can be repeated. Adds two columns per view:
   '<LABEL> Bugs Open (end of wk)' and '<LABEL> Bugs Resolved (this wk)'.
 
-Two "totals" are produced because CD cycles span 2 weeks:
-  - Total (active cycle): ETL cycle pts + full CD cycle pts.
-    Shows 'what's on the plate this week'. Will double-count CD pts
-    if you sum across two consecutive weeks of the same CD cycle.
-  - Per-week (proportional): ETL pts + (CD pts / cycle_weeks).
+When mixing weekly and biweekly cycles, two "totals" are produced:
+  - Total (active cycle): full pts of every active cycle this week.
+    Shows 'what's on the plate this week'. Double-counts biweekly cycles
+    if you sum across two consecutive weeks of the same cycle.
+  - Per-week (proportional): cycle pts / cycle_weeks summed.
     Sums correctly across weeks but understates each individual week's
     nominal commitment.
 """
@@ -311,7 +311,7 @@ def main():
             f"./weekly_compare_{'_'.join(m.lower() for m in members_to_compare)}_"
             f"{args.from_date}_to_{args.to_date}.csv"
         )
-        write_compare_csv(rows, members_to_compare, out, bug_views)
+        write_compare_csv(rows, members_to_compare, out, bug_views, teams)
         print(f"Wrote comparison CSV to {out}")
         return
 
@@ -327,7 +327,8 @@ def main():
     print(f"Wrote {len(rows)} rows to {out}")
 
 
-def write_compare_csv(rows: list, members: list, out_path: Path, bug_views: list):
+def write_compare_csv(rows: list, members: list, out_path: Path,
+                      bug_views: list, teams: list):
     """Pivot long-format rows into a side-by-side wide CSV, one row per week."""
     by_wk_member = {(r["Week Start"], r["Member"]): r for r in rows}
 
@@ -344,18 +345,10 @@ def write_compare_csv(rows: list, members: list, out_path: Path, bug_views: list
         row = {"Week Start": w_start, "Week": w_label}
         for m in members:
             r = by_wk_member.get((w_start, m), {})
-            row[f"{m} ETL P/C"] = (
-                f"{r.get('ETL Planned', '')}/{r.get('ETL Completed', '')}"
-                if r.get("ETL Planned") not in (None, "", 0) else ""
-            )
-            row[f"{m} CD P/C"] = (
-                f"{r.get('CD Planned', '')}/{r.get('CD Completed', '')}"
-                if r.get("CD Planned") not in (None, "", 0) else ""
-            )
-            row[f"{m} EXL P/C"] = (
-                f"{r.get('EXL Planned', '')}/{r.get('EXL Completed', '')}"
-                if r.get("EXL Planned") not in (None, "", 0) else ""
-            )
+            for tk in teams:
+                p = r.get(f"{tk} Planned")
+                c = r.get(f"{tk} Completed")
+                row[f"{m} {tk} P/C"] = f"{p}/{c}" if p not in (None, "", 0) else ""
             row[f"{m} Per-Week Planned"] = r.get("Per-Week Planned", 0) or 0
             row[f"{m} Per-Week Completed"] = r.get("Per-Week Completed", 0) or 0
             row[f"{m} Success"] = r.get("Per-Week Success", "")
