@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Linear Cycle Metrics Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  th, td { white-space: nowrap; padding: 4px 8px; font-size: 12px; }
+  th { background: #f1f5f9; position: sticky; top: 0; }
+  .group-divider { border-left: 2px solid #cbd5e1; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .ok { background: #dcfce7; }
+  .mid { background: #fef9c3; }
+  .bad { background: #fee2e2; }
+  .muted { color: #94a3b8; }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+<div class="max-w-screen-2xl mx-auto p-6">
+  <h1 class="text-2xl font-bold">Linear Cycle Metrics</h1>
+  <p class="text-sm text-slate-600 mb-6">
+    Per-week, per-member success rate across multiple Linear teams (weekly + biweekly cycles).
+    Data lives in your browser; nothing is sent anywhere except Linear's API.
+  </p>
+
+  <section class="bg-white rounded-lg shadow p-6 mb-6 grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <div>
+      <label class="block text-sm font-medium mb-1">Linear API Key
+        <a class="text-blue-600 text-xs" href="https://linear.app/settings/api" target="_blank">(generate)</a>
+      </label>
+      <div class="flex gap-2">
+        <input id="apiKey" type="password" class="flex-1 border rounded px-2 py-1" placeholder="lin_api_..." autocomplete="off" />
+        <button id="saveKeyBtn" class="px-3 py-1 bg-slate-700 text-white rounded text-sm">Save</button>
+        <button id="clearKeyBtn" class="px-3 py-1 bg-slate-200 rounded text-sm">Clear</button>
+      </div>
+      <p class="text-xs text-slate-500 mt-1">Stored in browser localStorage only.</p>
+    </div>
+
+    <div>
+      <label class="block text-sm font-medium mb-1">Teams (comma-separated keys)</label>
+      <input id="teams" type="text" class="w-full border rounded px-2 py-1" value="ETL,CD,EXL" />
+    </div>
+
+    <div>
+      <label class="block text-sm font-medium mb-1">From date</label>
+      <input id="fromDate" type="date" class="w-full border rounded px-2 py-1" />
+    </div>
+
+    <div>
+      <label class="block text-sm font-medium mb-1">To date</label>
+      <input id="toDate" type="date" class="w-full border rounded px-2 py-1" />
+    </div>
+
+    <div>
+      <label class="block text-sm font-medium mb-1">Members to compare (comma-separated; empty = all)</label>
+      <input id="members" type="text" class="w-full border rounded px-2 py-1" value="jack,yishern,shenwei,mengyit" />
+    </div>
+
+    <div>
+      <label class="block text-sm font-medium mb-1">Bug Views (LABEL:slugId, one per line)</label>
+      <textarea id="bugViews" class="w-full border rounded px-2 py-1 font-mono text-xs" rows="2">ETL1:b0fd1ffdeb3f
+ETL2:bff8b4260fff</textarea>
+    </div>
+
+    <div class="lg:col-span-2 flex gap-2 items-center">
+      <button id="analyzeBtn" class="px-5 py-2 bg-blue-600 text-white rounded font-medium">Analyze</button>
+      <span id="status" class="text-sm text-slate-600"></span>
+    </div>
+  </section>
+
+  <section id="resultsSection" class="hidden">
+    <div class="flex justify-between items-center mb-3">
+      <div class="flex gap-2">
+        <button data-view="compare" class="view-tab px-3 py-1 bg-slate-700 text-white rounded text-sm">Comparison</button>
+        <button data-view="long" class="view-tab px-3 py-1 bg-slate-200 rounded text-sm">Long format</button>
+      </div>
+      <div class="flex gap-2">
+        <button id="dlCompareBtn" class="px-3 py-1 bg-emerald-600 text-white rounded text-sm">⬇ Comparison CSV</button>
+        <button id="dlLongBtn" class="px-3 py-1 bg-emerald-600 text-white rounded text-sm">⬇ Long CSV</button>
+      </div>
+    </div>
+    <div id="tableContainer" class="bg-white rounded shadow overflow-auto" style="max-height: 75vh;"></div>
+  </section>
+</div>
+
+<script>
+"use strict";
+
+// ============================================================
+// CONFIG / STATE
+// ============================================================
+const ENDPOINT = "https://api.linear.app/graphql";
+const LS_KEY = "linear_cycle_dashboard_v1";
+let LAST = { longRows: [], compareRows: [], bugViews: [], members: [], teams: [], view: "compare" };
+
+// ============================================================
+// localStorage
+// ============================================================
+function loadState() {
+  try { return JSON.parse(localStorage.getItem(LS_KEY) || "{}"); }
+  catch { return {}; }
+}
+function saveState(patch) {
+  const cur = loadState();
+  localStorage.setItem(LS_KEY, JSON.stringify({ ...cur, ...patch }));
+}
+
+function initForm() {
+  const s = loadState();
+  if (s.apiKey) document.getElementById("apiKey").value = s.apiKey;
+  if (s.teams) document.getElementById("teams").value = s.teams;
+  if (s.members) document.getElementById("members").value = s.members;
+  if (s.bugViews) document.getElementById("bugViews").value = s.bugViews;
+
+  // Default date range: last 8 weeks ending this week's Sunday
+  const today = new Date();
+  const dow = today.getDay(); // 0=Sun
+  const sunday = new Date(today); sunday.setDate(today.getDate() + (7 - dow) % 7);
+  const eightWksAgoMon = new Date(sunday); eightWksAgoMon.setDate(sunday.getDate() - 7 * 8);
+  document.getElementById("fromDate").value = s.fromDate || eightWksAgoMon.toISOString().slice(0, 10);
+  document.getElementById("toDate").value   = s.toDate   || sunday.toISOString().slice(0, 10);
+}
+
+// ============================================================
+// LINEAR API
+// ============================================================
+async function gql(query, variables = {}) {
+  const apiKey = document.getElementById("apiKey").value.trim();
+  if (!apiKey) throw new Error("Linear API key required");
+  let attempt = 0;
+  while (true) {
+    const resp = await fetch(ENDPOINT, {
+      method: "POST",
+      headers: { "Authorization": apiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ query, variables }),
+    });
+    if (resp.status === 429 || resp.status >= 500) {
+      if (attempt++ < 4) { await new Promise(r => setTimeout(r, 1000 * (1 << attempt))); continue; }
+    }
+    if (!resp.ok) {
+      const txt = await resp.text();
+      throw new Error(`HTTP ${resp.status}: ${txt.slice(0, 300)}`);
+    }
+    const body = await resp.json();
+    if (body.errors) throw new Error("GraphQL: " + JSON.stringify(body.errors));
+    return body.data;
+  }
+}
+
+async function resolveTeam(key) {
+  const data = await gql(
+    `query($k: String!) {
+       teams(filter: { key: { eq: $k } }, first: 1) {
+         nodes { id name key }
+       }
+     }`,
+    { k: key.toUpperCase() }
+  );
+  if (!data.teams.nodes.length) throw new Error(`Team not found: ${key}`);
+  return data.teams.nodes[0];
+}
+
+async function fetchCycles(teamId) {
+  const data = await gql(
+    `query($t: String!) {
+       team(id: $t) {
+         cycles(first: 100) {
+           nodes { id number startsAt endsAt completedScopeHistory scopeHistory }
+         }
+       }
+     }`,
+    { t: teamId }
+  );
+  const out = {};
+  for (const c of data.team.cycles.nodes) out[c.number] = c;
+  return out;
+}
+
+async function fetchAllTeamIssues(teamId, onProgress) {
+  const issues = [];
+  let cursor = null;
+  while (true) {
+    const data = await gql(
+      `query($t: String!, $c: String) {
+         team(id: $t) {
+           issues(first: 25, after: $c, includeArchived: true) {
+             pageInfo { hasNextPage endCursor }
+             nodes {
+               id identifier estimate completedAt canceledAt createdAt
+               state { type name }
+               assignee { id displayName name }
+               cycle { id number }
+               history(first: 50) {
+                 nodes { id createdAt fromCycle { id number } toCycle { id number } }
+               }
+             }
+           }
+         }
+       }`,
+      { t: teamId, c: cursor }
+    );
+    const page = data.team.issues;
+    issues.push(...page.nodes);
+    onProgress?.(issues.length);
+    if (!page.pageInfo.hasNextPage) break;
+    cursor = page.pageInfo.endCursor;
+  }
+  return issues;
+}
+
+async function fetchViewIssues(slugId) {
+  const issues = [];
+  let cursor = null;
+  while (true) {
+    const data = await gql(
+      `query($id: String!, $c: String) {
+         customView(id: $id) {
+           issues(first: 100, after: $c, includeArchived: true) {
+             pageInfo { hasNextPage endCursor }
+             nodes {
+               identifier createdAt completedAt canceledAt
+               state { type }
+               assignee { id displayName name }
+             }
+           }
+         }
+       }`,
+      { id: slugId, c: cursor }
+    );
+    const page = data.customView.issues;
+    issues.push(...page.nodes);
+    if (!page.pageInfo.hasNextPage) break;
+    cursor = page.pageInfo.endCursor;
+  }
+  return issues;
+}
+
+// ============================================================
+// CYCLE LOGIC (port of Python script)
+// ============================================================
+function cycleIdAtTime(issue, tIso) {
+  const events = (issue.history?.nodes || [])
+    .filter(h => h.fromCycle || h.toCycle)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  if (issue.createdAt > tIso) return null;
+  let curId = issue.cycle?.id ?? null;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const h = events[i];
+    if (h.createdAt <= tIso) break;
+    curId = h.fromCycle?.id ?? null;
+  }
+  return curId;
+}
+const isCompletedAtTime = (i, t) => i.completedAt && i.completedAt <= t;
+const isCanceledAtTime  = (i, t) => i.canceledAt && i.canceledAt <= t;
+const points = e => (e ?? 1);
+const assigneeName = i => i.assignee ? (i.assignee.displayName || i.assignee.name || "Unknown") : "Unassigned";
+
+function perMemberStats(issues, cycles) {
+  const out = {};
+  for (const num in cycles) {
+    const cyc = cycles[num], cycId = cyc.id, end = cyc.endsAt;
+    const per = {};
+    for (const iss of issues) {
+      if (cycleIdAtTime(iss, end) !== cycId) continue;
+      if (isCanceledAtTime(iss, end)) continue;
+      const movedBack = (iss.history?.nodes || []).some(h =>
+        h.createdAt > end && h.toCycle && h.toCycle.id === cycId);
+      if (movedBack) continue;
+      const est = points(iss.estimate);
+      const done = isCompletedAtTime(iss, end);
+      const who = assigneeName(iss);
+      per[who] = per[who] || { planned: 0, completed: 0, plannedPts: 0, completedPts: 0 };
+      per[who].planned += 1;
+      per[who].plannedPts += est;
+      if (done) { per[who].completed += 1; per[who].completedPts += est; }
+    }
+    out[num] = per;
+  }
+  return out;
+}
+
+// ============================================================
+// DATE / WEEK UTILS
+// ============================================================
+const MYT_OFFSET_MS = 8 * 3600 * 1000;
+function toMytDate(iso) {
+  const d = new Date(new Date(iso).getTime() + MYT_OFFSET_MS);
+  return d.toISOString().slice(0, 10);
+}
+function mondayOf(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  const dow = (d.getDay() + 6) % 7; // Mon=0
+  d.setDate(d.getDate() - dow);
+  return d.toISOString().slice(0, 10);
+}
+function addDays(dateStr, n) {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+function fmtMon(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+function weekLabel(start, end) {
+  const a = new Date(start + "T00:00:00"), b = new Date(end + "T00:00:00");
+  const sameMonth = a.getMonth() === b.getMonth();
+  if (sameMonth) return `${fmtMon(start)}–${b.getDate()}`;
+  return `${fmtMon(start)}–${fmtMon(end)}`;
+}
+
+function cycleOverlappingWeek(teamData, weekStart, weekEnd) {
+  const hits = [];
+  for (const num in teamData.cycles) {
+    const cyc = teamData.cycles[num];
+    const cs = toMytDate(cyc.startsAt);
+    const ceRaw = toMytDate(cyc.endsAt);
+    const ce = addDays(ceRaw, -1);  // inclusive end
+    if (cs > weekEnd || ce < weekStart) continue;
+    const cycDays = (Date.parse(ce) - Date.parse(cs)) / 86400000 + 1;
+    const cycWeeks = Math.max(1, Math.floor(cycDays / 7));
+    const daysIn = (Date.parse(weekStart) - Date.parse(cs)) / 86400000;
+    const wkIdx = daysIn >= 0 ? Math.floor(daysIn / 7) + 1 : 1;
+    hits.push({ num, cyc, stats: teamData.stats[num], cycWeeks, wkIdx });
+  }
+  return hits;
+}
+
+// ============================================================
+// BUG METRICS
+// ============================================================
+function bugMetricsForWeek(bugs, wkStartIso, wkEndIso) {
+  const out = {};
+  for (const b of bugs) {
+    const a = b.assignee; if (!a) continue;
+    const who = a.displayName || a.name;
+    const created = b.createdAt || "";
+    const done = b.completedAt;
+    const canceled = b.canceledAt;
+    if (created > wkEndIso) continue;
+    const openAtEnd = (!done || done > wkEndIso) && (!canceled || canceled > wkEndIso);
+    out[who] = out[who] || { open: 0, resolved: 0 };
+    if (openAtEnd) out[who].open += 1;
+    if (done && wkStartIso <= done && done <= wkEndIso) out[who].resolved += 1;
+  }
+  return out;
+}
+
+// ============================================================
+// AGGREGATION
+// ============================================================
+function buildLongRows(weeks, teamsData, bugViews, memberFilter) {
+  const rows = [];
+  const teams = Object.keys(teamsData);
+  for (const wStart of weeks) {
+    const wEnd = addDays(wStart, 6);
+    const wkStartIso = wStart + "T00:00:00Z";
+    const wkEndIso   = addDays(wEnd, 1) + "T00:00:00Z";
+
+    const teamCycle = {};
+    const members = new Set();
+    for (const tk of teams) {
+      const hits = cycleOverlappingWeek(teamsData[tk], wStart, wEnd);
+      teamCycle[tk] = hits[0] || null;
+      if (hits[0]) Object.keys(hits[0].stats).forEach(m => members.add(m));
+    }
+    const bugMetrics = {};
+    for (const v of bugViews) {
+      const m = bugMetricsForWeek(v.issues, wkStartIso, wkEndIso);
+      bugMetrics[v.label] = m;
+      Object.keys(m).forEach(k => members.add(k));
+    }
+
+    const filtered = memberFilter
+      ? [...members].filter(m => memberFilter.some(f => m.toLowerCase().includes(f.toLowerCase())))
+      : [...members];
+    filtered.sort();
+
+    for (const who of filtered) {
+      const r = { "Week Start": wStart, "Week End": wEnd, "Week": weekLabel(wStart, wEnd), "Member": who };
+      let activeP = 0, activeC = 0, perWkP = 0, perWkC = 0, anyPlanned = false;
+
+      for (const tk of teams) {
+        const hit = teamCycle[tk];
+        if (!hit) {
+          r[`${tk} Cycle`] = ""; r[`${tk} Cycle Week`] = "";
+          r[`${tk} Planned`] = ""; r[`${tk} Completed`] = ""; r[`${tk} Success Rate`] = "";
+          continue;
+        }
+        const ms = hit.stats[who] || { plannedPts: 0, completedPts: 0 };
+        const pp = ms.plannedPts, cp = ms.completedPts;
+        const rate = pp ? cp / pp : null;
+        r[`${tk} Cycle`] = `Cycle ${hit.num}`;
+        r[`${tk} Cycle Week`] = hit.cycWeeks > 1 ? `${hit.wkIdx}/${hit.cycWeeks}` : "—";
+        r[`${tk} Planned`] = pp; r[`${tk} Completed`] = cp;
+        r[`${tk} Success Rate`] = rate !== null ? `${Math.round(rate*100)}%` : "";
+        activeP += pp; activeC += cp;
+        perWkP += pp / hit.cycWeeks; perWkC += cp / hit.cycWeeks;
+        if (pp > 0) anyPlanned = true;
+      }
+
+      let anyBug = false;
+      for (const v of bugViews) {
+        const bm = bugMetrics[v.label]?.[who] || { open: 0, resolved: 0 };
+        r[`${v.label} Bugs Open (eow)`] = bm.open;
+        r[`${v.label} Bugs Resolved (this wk)`] = bm.resolved;
+        if (bm.open || bm.resolved) anyBug = true;
+      }
+      if (!anyPlanned && !anyBug) continue;
+
+      r["Total Planned (active cycles)"] = activeP;
+      r["Total Completed (active cycles)"] = activeC;
+      r["Total Success (active)"] = activeP ? `${Math.round(activeC/activeP*100)}%` : "";
+      r["Per-Week Planned"] = Math.round(perWkP * 10) / 10;
+      r["Per-Week Completed"] = Math.round(perWkC * 10) / 10;
+      r["Per-Week Success"] = perWkP ? `${Math.round(perWkC/perWkP*100)}%` : "";
+      rows.push(r);
+    }
+  }
+  return rows;
+}
+
+function buildCompareRows(longRows, members, bugViews) {
+  const teams = ["ETL", "CD", "EXL"]; // try all common; absent ones skipped
+  const byKey = new Map();
+  for (const r of longRows) byKey.set(r["Week Start"] + "::" + r.Member, r);
+
+  const weeks = [];
+  const seen = new Set();
+  for (const r of longRows) {
+    if (!seen.has(r["Week Start"])) { seen.add(r["Week Start"]); weeks.push([r["Week Start"], r["Week"]]); }
+  }
+
+  const out = [];
+  for (const [wStart, wLabel] of weeks) {
+    const row = { "Week Start": wStart, "Week": wLabel };
+    for (const m of members) {
+      const r = byKey.get(wStart + "::" + m) || {};
+      for (const tk of teams) {
+        const p = r[`${tk} Planned`], c = r[`${tk} Completed`];
+        row[`${m} ${tk} P/C`] = (p && p !== "") ? `${p}/${c}` : "";
+      }
+      row[`${m} Per-Week Planned`] = r["Per-Week Planned"] ?? 0;
+      row[`${m} Per-Week Completed`] = r["Per-Week Completed"] ?? 0;
+      row[`${m} Success`] = r["Per-Week Success"] || "";
+      let bo = 0, br = 0;
+      for (const v of bugViews) {
+        bo += +(r[`${v.label} Bugs Open (eow)`] || 0);
+        br += +(r[`${v.label} Bugs Resolved (this wk)`] || 0);
+      }
+      row[`${m} Bugs Open`] = bo;
+      row[`${m} Bugs Resolved`] = br;
+    }
+    out.push(row);
+  }
+  return out;
+}
+
+// ============================================================
+// CSV
+// ============================================================
+function rowsToCSV(rows) {
+  if (!rows.length) return "";
+  const cols = Object.keys(rows[0]);
+  const esc = v => {
+    if (v === null || v === undefined) return "";
+    const s = String(v);
+    return /[",\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
+  };
+  const lines = [cols.join(",")];
+  for (const r of rows) lines.push(cols.map(c => esc(r[c])).join(","));
+  return lines.join("\n");
+}
+function downloadCSV(filename, rows) {
+  const csv = rowsToCSV(rows);
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// ============================================================
+// RENDERING
+// ============================================================
+function classForRate(text) {
+  const m = /(\d+)%/.exec(text || "");
+  if (!m) return "";
+  const v = +m[1];
+  if (v >= 80) return "ok";
+  if (v >= 50) return "mid";
+  return "bad";
+}
+function classForBugs(n) {
+  n = +n || 0;
+  if (n === 0) return "muted";
+  if (n >= 6) return "bad";
+  if (n >= 3) return "mid";
+  return "";
+}
+
+function renderTable() {
+  const view = LAST.view;
+  const rows = view === "compare" ? LAST.compareRows : LAST.longRows;
+  if (!rows.length) {
+    document.getElementById("tableContainer").innerHTML =
+      '<div class="p-8 text-center text-slate-500">No data.</div>';
+    return;
+  }
+  const cols = Object.keys(rows[0]);
+  let html = '<table class="text-sm border-collapse"><thead><tr>';
+  for (const c of cols) html += `<th class="text-left">${c}</th>`;
+  html += '</tr></thead><tbody>';
+  for (const r of rows) {
+    html += '<tr class="border-b border-slate-100">';
+    for (const c of cols) {
+      const v = r[c] ?? "";
+      let cls = "";
+      if (/Success/.test(c)) cls = classForRate(v);
+      else if (/Bugs Open/.test(c)) cls = classForBugs(v);
+      else if (/Bugs Resolved/.test(c)) cls = classForBugs(v) === "bad" ? "ok" : "";
+      const isNum = typeof v === "number" || /^\d+(\.\d+)?$/.test(String(v));
+      html += `<td class="${cls} ${isNum ? "num" : ""}">${v}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  document.getElementById("tableContainer").innerHTML = html;
+}
+
+function setStatus(msg) { document.getElementById("status").textContent = msg; }
+
+// ============================================================
+// MAIN
+// ============================================================
+async function analyze() {
+  const btn = document.getElementById("analyzeBtn");
+  btn.disabled = true; btn.classList.add("opacity-50");
+  document.getElementById("resultsSection").classList.add("hidden");
+  setStatus("Loading…");
+
+  try {
+    const teams = document.getElementById("teams").value.split(",").map(s => s.trim()).filter(Boolean);
+    const fromD = document.getElementById("fromDate").value;
+    const toD = document.getElementById("toDate").value;
+    const memberFilter = document.getElementById("members").value
+      .split(",").map(s => s.trim()).filter(Boolean);
+    const bugViewSpecs = document.getElementById("bugViews").value
+      .split("\n").map(s => s.trim()).filter(Boolean)
+      .map(line => {
+        const [label, slug] = line.split(":");
+        return { label: label?.trim(), slug: slug?.trim() };
+      }).filter(v => v.label && v.slug);
+
+    saveState({
+      apiKey: document.getElementById("apiKey").value.trim(),
+      teams: teams.join(","),
+      fromDate: fromD, toDate: toD,
+      members: memberFilter.join(","),
+      bugViews: document.getElementById("bugViews").value,
+    });
+
+    if (!fromD || !toD) throw new Error("Pick from/to dates");
+
+    // Fetch all teams in parallel
+    const teamsData = {};
+    await Promise.all(teams.map(async tk => {
+      setStatus(`Loading team ${tk}…`);
+      const team = await resolveTeam(tk);
+      const cycles = await fetchCycles(team.id);
+      const issues = await fetchAllTeamIssues(team.id, n => setStatus(`${tk}: ${n} issues fetched…`));
+      const stats = perMemberStats(issues, cycles);
+      teamsData[tk] = { team, cycles, stats };
+    }));
+
+    // Fetch bug views in parallel
+    setStatus("Loading bug views…");
+    const bugViews = await Promise.all(bugViewSpecs.map(async v => ({
+      label: v.label, issues: await fetchViewIssues(v.slug),
+    })));
+
+    // Build weeks
+    const start = mondayOf(fromD);
+    const weeks = [];
+    let cur = start;
+    while (cur <= toD) { weeks.push(cur); cur = addDays(cur, 7); }
+
+    setStatus("Computing…");
+    const longRows = buildLongRows(weeks, teamsData, bugViews,
+      memberFilter.length ? memberFilter : null);
+    const compareRows = memberFilter.length
+      ? buildCompareRows(longRows, memberFilter, bugViews)
+      : [];
+
+    LAST = { longRows, compareRows, bugViews, members: memberFilter, teams, view: "compare" };
+    if (!compareRows.length) LAST.view = "long";
+
+    setStatus(`Done. ${longRows.length} long rows, ${compareRows.length} comparison rows.`);
+    document.getElementById("resultsSection").classList.remove("hidden");
+    updateViewTabs(); renderTable();
+  } catch (e) {
+    console.error(e);
+    setStatus("");
+    alert("Error: " + e.message);
+  } finally {
+    btn.disabled = false; btn.classList.remove("opacity-50");
+  }
+}
+
+function updateViewTabs() {
+  for (const btn of document.querySelectorAll(".view-tab")) {
+    const active = btn.dataset.view === LAST.view;
+    btn.className = "view-tab px-3 py-1 rounded text-sm " +
+      (active ? "bg-slate-700 text-white" : "bg-slate-200");
+  }
+  // Disable compare tab if no compare rows
+  const compareBtn = document.querySelector('.view-tab[data-view="compare"]');
+  if (!LAST.compareRows.length) { compareBtn.disabled = true; compareBtn.classList.add("opacity-50"); }
+}
+
+// ============================================================
+// WIRE UP
+// ============================================================
+document.getElementById("saveKeyBtn").onclick = () => {
+  saveState({ apiKey: document.getElementById("apiKey").value.trim() });
+  setStatus("API key saved.");
+};
+document.getElementById("clearKeyBtn").onclick = () => {
+  document.getElementById("apiKey").value = "";
+  saveState({ apiKey: "" });
+  setStatus("API key cleared.");
+};
+document.getElementById("analyzeBtn").onclick = analyze;
+document.getElementById("dlCompareBtn").onclick = () => {
+  if (!LAST.compareRows.length) return alert("No comparison rows. Add members to compare.");
+  downloadCSV("comparison.csv", LAST.compareRows);
+};
+document.getElementById("dlLongBtn").onclick = () => {
+  if (!LAST.longRows.length) return alert("Run Analyze first.");
+  downloadCSV("long.csv", LAST.longRows);
+};
+for (const btn of document.querySelectorAll(".view-tab")) {
+  btn.onclick = () => { LAST.view = btn.dataset.view; updateViewTabs(); renderTable(); };
+}
+
+initForm();
+</script>
+</body>
+</html>
