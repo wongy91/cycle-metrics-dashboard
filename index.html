@@ -19,7 +19,7 @@
 <div class="max-w-screen-2xl mx-auto p-6">
   <div class="flex items-baseline justify-between gap-4">
     <h1 class="text-2xl font-bold">Linear Cycle Metrics</h1>
-    <span class="text-xs text-slate-500" title="Page revision">rev 20260504 12:08PM (UTC+8)</span>
+    <span class="text-xs text-slate-500" title="Page revision">rev 20260504 02:47PM (UTC+8)</span>
   </div>
   <p class="text-sm text-slate-600 mb-6">
     Per-week, per-member success rate across multiple Linear teams (weekly + biweekly cycles).
@@ -63,6 +63,13 @@
       <label class="block text-sm font-medium mb-1">Bug Views (LABEL:slugId, one per line)</label>
       <textarea id="bugViews" class="w-full border rounded px-2 py-1 font-mono text-xs" rows="2" placeholder="LABEL1:slugId1
 LABEL2:slugId2"></textarea>
+      <p class="text-xs text-slate-500 mt-1 leading-relaxed">
+        Format is <code class="bg-slate-100 px-1 rounded">YOUR_LABEL:slugId</code>.
+        <b>LABEL</b> is anything you pick — it shows up as the column header (e.g. <code class="bg-slate-100 px-1 rounded">BUGS</code>).
+        <b>slugId</b> is the last 12 hex chars (everything after the final hyphen) in the view's Linear URL:
+        <code class="bg-slate-100 px-1 rounded">linear.app/&lt;org&gt;/view/&lt;name&gt;-<b>xxxxxxxxxxxx</b></code>
+        → put it together as <code class="bg-slate-100 px-1 rounded">BUGS:xxxxxxxxxxxx</code>.
+      </p>
     </div>
 
     <div class="lg:col-span-2 flex gap-2 items-center">
