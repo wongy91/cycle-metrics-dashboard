@@ -19,7 +19,7 @@
 <div class="max-w-screen-2xl mx-auto p-6">
   <div class="flex items-baseline justify-between gap-4">
     <h1 class="text-2xl font-bold">Linear Cycle Metrics</h1>
-    <span class="text-xs text-slate-500" title="Page revision">rev 20260504 02:47PM (UTC+8)</span>
+    <span class="text-xs text-slate-500" title="Page revision">rev 20260504 02:55PM (UTC+8)</span>
   </div>
   <p class="text-sm text-slate-600 mb-6">
     Per-week, per-member success rate across multiple Linear teams (weekly + biweekly cycles).
@@ -98,6 +98,7 @@ LABEL2:slugId2"></textarea>
       <span class="block"><b>Perf badge</b> = mean of weekly per-member success rates (pts-based, each week weighted equally). High ≥80%, Mid 50–79%, Low &lt;50%.</span>
       <span class="block"><b>Consistency badge</b> = standard deviation of weekly success rates. Consistent σ&lt;15, Variable σ=15–25, Inconsistent σ&gt;25.</span>
       <span class="block"><b>Overall</b> (in summary line) = total completed pts ÷ total planned pts — pts-weighted, so big weeks count more than small ones. Differs from Perf because Perf treats each week equally regardless of size.</span>
+      <span class="block"><b>Bugs Open / Bugs Resolved</b> are <i>not</i> factored into Success rate, Perf, or Consistency badges — they're shown alongside cycle pts as a separate signal.</span>
     </p>
     <div id="teamFilterBar" class="hidden mb-2 flex gap-2 items-center text-sm"></div>
     <div id="tableContainer" class="bg-white rounded shadow"></div>
