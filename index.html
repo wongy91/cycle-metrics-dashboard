@@ -84,7 +84,8 @@ LABEL2:slugId2"></textarea>
     <p class="text-xs text-slate-500 mb-2 leading-relaxed">
       <strong>Notes:</strong>
       <span class="block"><b>Per-Week Planned/Completed</b> = ETL (1-week cycle) full pts + CD/EXL (2-week cycle) pts ÷ 2. Biweekly cycles are averaged across the 2 weeks they cover, so weekly totals don't double-count.</span>
-      <span class="block"><b>Perf badge</b> = mean of weekly success rates (each week weighted equally). High ≥80%, Mid 50–79%, Low &lt;50%.</span>
+      <span class="block"><b>Team-cycle Success Rate</b> = Linear's <code>cycle.progress</code> (issue-count based, mirrors Linear's UI). Per-member success rates remain points-based since Linear doesn't report progress per assignee.</span>
+      <span class="block"><b>Perf badge</b> = mean of weekly per-member success rates (pts-based, each week weighted equally). High ≥80%, Mid 50–79%, Low &lt;50%.</span>
       <span class="block"><b>Consistency badge</b> = standard deviation of weekly success rates. Consistent σ&lt;15, Variable σ=15–25, Inconsistent σ&gt;25.</span>
       <span class="block"><b>Overall</b> (in summary line) = total completed pts ÷ total planned pts — pts-weighted, so big weeks count more than small ones. Differs from Perf because Perf treats each week equally regardless of size.</span>
     </p>
@@ -175,7 +176,11 @@ async function fetchCycles(teamId) {
     `query($t: String!) {
        team(id: $t) {
          cycles(first: 100) {
-           nodes { id number startsAt endsAt completedScopeHistory scopeHistory }
+           nodes {
+             id number startsAt endsAt progress
+             scopeHistory completedScopeHistory
+             issueCountHistory completedIssueCountHistory
+           }
          }
        }
      }`,
@@ -263,7 +268,7 @@ function cycleIdAtTime(issue, tIso) {
 }
 const isCompletedAtTime = (i, t) => i.completedAt && i.completedAt <= t;
 const isCanceledAtTime  = (i, t) => i.canceledAt && i.canceledAt <= t;
-const points = e => (e ?? 1);
+const points = e => (e ?? 0);
 const assigneeName = i => i.assignee ? (i.assignee.displayName || i.assignee.name || "Unknown") : "Unassigned";
 
 function perMemberStats(issues, cycles) {
@@ -450,12 +455,20 @@ function buildTeamCycleRows(teamsData, fromDate, toDate) {
         planned += stats[who].plannedPts;
         completed += stats[who].completedPts;
       }
-      // Linear API daily snapshots for sanity-check column
+      // Linear API daily snapshots — used to mirror Linear's cycle UI.
+      // Linear's success % is issue-count based, not points.
       const sh = cyc.scopeHistory || [];
       const csh = cyc.completedScopeHistory || [];
+      const ich = cyc.issueCountHistory || [];
+      const cich = cyc.completedIssueCountHistory || [];
       const apiScope = sh.length ? sh[sh.length - 1] : "";
       const apiDone = csh.length ? csh[csh.length - 1] : "";
-      const rate = planned ? completed / planned : 0;
+      const apiIssues = ich.length ? ich[ich.length - 1] : 0;
+      const apiDoneIssues = cich.length ? cich[cich.length - 1] : 0;
+      // Prefer Linear's own progress field; fall back to issue-count ratio.
+      const linearRate = (typeof cyc.progress === "number")
+        ? cyc.progress
+        : (apiIssues ? apiDoneIssues / apiIssues : 0);
       const cycWeeks = Math.max(1, Math.round((Date.parse(ce) - Date.parse(cs)) / 86400000 / 7));
 
       out.push({
@@ -466,8 +479,8 @@ function buildTeamCycleRows(teamsData, fromDate, toDate) {
         "Length": cycWeeks === 1 ? "1 wk" : `${cycWeeks} wks`,
         "Planned (pts)": planned,
         "Completed (pts)": completed,
-        "Success Rate": planned ? `${Math.round(rate * 100)}%` : "",
-        "Linear API (done/scope)": apiScope ? `${apiDone}/${apiScope}` : "",
+        "Success Rate": apiIssues ? `${Math.round(linearRate * 100)}%` : "",
+        "Linear API (done/scope)": apiScope !== "" ? `${apiDone}/${apiScope} pts · ${apiDoneIssues}/${apiIssues} issues` : "",
       });
     }
   }
