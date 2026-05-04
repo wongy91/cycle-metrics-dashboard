@@ -19,7 +19,7 @@
 <div class="max-w-screen-2xl mx-auto p-6">
   <div class="flex items-baseline justify-between gap-4">
     <h1 class="text-2xl font-bold">Linear Cycle Metrics</h1>
-    <span class="text-xs text-slate-500" title="Page revision">rev 20260504 12:02PM (UTC+8)</span>
+    <span class="text-xs text-slate-500" title="Page revision">rev 20260504 12:08PM (UTC+8)</span>
   </div>
   <p class="text-sm text-slate-600 mb-6">
     Per-week, per-member success rate across multiple Linear teams (weekly + biweekly cycles).
@@ -271,7 +271,7 @@ function cycleIdAtTime(issue, tIso) {
 }
 const isCompletedAtTime = (i, t) => i.completedAt && i.completedAt <= t;
 const isCanceledAtTime  = (i, t) => i.canceledAt && i.canceledAt <= t;
-const points = e => (e ?? 0);
+const points = e => (e ?? 1);
 const assigneeName = i => i.assignee ? (i.assignee.displayName || i.assignee.name || "Unknown") : "Unassigned";
 
 function perMemberStats(issues, cycles) {
